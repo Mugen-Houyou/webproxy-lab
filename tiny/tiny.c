@@ -5,6 +5,8 @@
  *
  * Updated 11/2019 droh
  *   - Fixed sprintf() aliasing issue in serve_static(), and clienterror().
+ * 
+ * Mugen-Houyou initial commit
  */
 #include "csapp.h"
 
