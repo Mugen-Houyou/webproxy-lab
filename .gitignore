@@ -1,7 +1,10 @@
+.vscode
+.vscode/*
+
 # Targets
-tiny/tiny
-tiny/cgi-bin/adder
-proxy
+# tiny/tiny
+# tiny/cgi-bin/adder
+# proxy
 
 # MacOS
 .DS_Store
