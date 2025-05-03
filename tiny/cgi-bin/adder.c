@@ -11,7 +11,7 @@ int main(void) {
 
   /* Extract the two arguments from QUERY_STRING */
   if ((buf = getenv("QUERY_STRING")) != NULL) {
-    char *v1 = strstr(buf, "num1="); // 예: "num1=1&num2=2"
+    char *v1 = strstr(buf, "num1="); // 예: "adder?num1=1&num2=2"
     char *v2 = strstr(buf, "num2=");
 
     if (v1) {
