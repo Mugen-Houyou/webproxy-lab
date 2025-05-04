@@ -3,29 +3,18 @@
  */
 #include "csapp.h"
 
-#define MAX_CACHE_SIZE (10 << 20) // 10메가
-#define MAX_OBJECT_SIZE (1 << 20) // 1메가
-
 #define MAX_HEADERS 100
 #define SHORT_CHARS 16
 
-// typedef struct { /* represents a pool of connected descriptors */ 
-//     int maxfd;        /* largest descriptor in read_set */   
-//     fd_set read_set;  /* set of all active descriptors */
-//     fd_set ready_set; /* subset of descriptors ready for reading  */
-//     int nready;       /* number of ready descriptors from select */   
-//     int maxi;         /* highwater index into client array */
-//     int clientfd[FD_SETSIZE];    /* set of active descriptors */
-//     rio_t clientrio[FD_SETSIZE]; /* set of active read buffers */
-// } pool; 
-
-typedef struct cache_entry {
-  char uri[MAXLINE];
-  char *content;
-  int content_length;
-  struct cache_entry *prev, *next;
-} cache_entry_t;
-
+typedef struct { /* represents a pool of connected descriptors */ 
+    int maxfd;        /* largest descriptor in read_set */   
+    fd_set read_set;  /* set of all active descriptors */
+    fd_set ready_set; /* subset of descriptors ready for reading  */
+    int nready;       /* number of ready descriptors from select */   
+    int maxi;         /* highwater index into client array */
+    int clientfd[FD_SETSIZE];    /* set of active descriptors */
+    rio_t clientrio[FD_SETSIZE]; /* set of active read buffers */
+} pool; 
 
 typedef struct {
   char method[SHORT_CHARS];
@@ -43,30 +32,33 @@ typedef struct {
 
 /* 전역 함수 선언 */
 // echo에서 가져온 파트
-// void init_pool(int listenfd, pool *p);
-// void add_client(int connfd, pool *p);
-// void check_clients(pool *p);
+void init_pool(int listenfd, pool *p);
+void add_client(int connfd, pool *p);
+void check_clients(pool *p);
 
 // tiny에서 가져온 파트
 int parse_uri(const char* uri, char* hostname, char* port, char* path);
 
+
 /* $begin proxyserversmain */
 int total_bytes_received = 0; /* counts total bytes received by server */
 
-void *thread_main_process_client(void *vargp) {
-  int connfd = *((int *)vargp);
-  free(vargp);  // 메모리 누수 방지
-  pthread_detach(pthread_self());  // 스레드 종료 시 자동 회수
-  client_handler(connfd);  // 클라이언트 요청 처리
-  Close(connfd);  // 종료 시 소켓 닫기
-  return NULL;
-}
+
+// // 좀비 프로세스 처리
+// void sigchld_handler(int sig) {
+//   while (waitpid(-1, NULL, WNOHANG) > 0);
+// }
+
 
 int main(int argc, char **argv){
 	char* port_p;
   int listenfd, connfd, port; 
   socklen_t clientlen = sizeof(struct sockaddr_in);
   struct sockaddr_in clientaddr;
+  static pool pool; 
+
+  // // 좀비 프로세스 처리
+  // Signal(SIGCHLD, sigchld_handler);
 
   if (argc != 2) {
 		fprintf(stderr, "usage: %s <port>\n", argv[0]);
@@ -76,59 +68,147 @@ int main(int argc, char **argv){
 	port_p = argv[1];
 
   listenfd = Open_listenfd(port_p);
-  // init_pool(listenfd, &pool);
+  init_pool(listenfd, &pool);
 
   while (1) {
-    int *connfdp = Malloc(sizeof(int));
-    *connfdp = Accept(listenfd, (SA *)&clientaddr, &clientlen);
-    pthread_t tid;
-    pthread_create(&tid, NULL, thread_main_process_client, connfdp);
+    /* Wait for listening/connected descriptor(s) to become ready */
+    pool.ready_set = pool.read_set;
+    pool.nready = Select(pool.maxfd+1, &pool.ready_set, NULL, NULL, NULL);
+
+    /* If listening descriptor ready, add new client to pool */
+    if (FD_ISSET(listenfd, &pool.ready_set)) {
+      connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen); 
+      add_client(connfd, &pool); 
+    }
+      
+    /* 여기가 do the proxy request & response from each ready connected descriptor */ 
+    check_clients(&pool);
   }
 }
 /* $end proxyserversmain */
 
-void client_handler(int connfd){
-  rio_t rio;
+/* $begin init_pool */
+void init_pool(int listenfd, pool *p){
+  /* Initially, there are no connected descriptors */
+  int i;
+
+  p->maxi = -1;
+  for (i=0; i< FD_SETSIZE; i++)  
+    p->clientfd[i] = -1;
+
+  /* Initially, listenfd is only member of select read set */
+  p->maxfd = listenfd; 
+  FD_ZERO(&p->read_set);
+  FD_SET(listenfd, &p->read_set); 
+}
+/* $end init_pool */
+
+/* $begin add_client */
+void add_client(int connfd, pool *p) {
+  int i;
+
+  p->nready--;
+  for (i = 0; i < FD_SETSIZE; i++)  /* Find an available slot */
+  if (p->clientfd[i] < 0) { 
+    /* Add connected descriptor to the pool */
+    p->clientfd[i] = connfd;
+    Rio_readinitb(&p->clientrio[i], connfd);
+
+    /* Add the descriptor to descriptor set */
+    FD_SET(connfd, &p->read_set); 
+
+    /* Update max descriptor and pool highwater mark */
+    if (connfd > p->maxfd)
+      p->maxfd = connfd;
+    if (i > p->maxi) 
+      p->maxi = i;  
+
+    break;
+  }
+
+  if (i == FD_SETSIZE) /* Couldn't find an empty slot */
+  app_error("add_client error: Too many clients");
+}
+/* $end add_client */
+
+static void process_ready_client(pool *p, int idx){
+  int connfd = p->clientfd[idx];
+  rio_t rio = p->clientrio[idx];
   char buf[MAXLINE], line[MAXLINE];
   http_request_t req;
   int n;
 
-  Rio_readinitb(&rio, connfd);
-
-  // 요청 라인 읽기
-  if (Rio_readlineb(&rio, buf, MAXLINE) <= 0)  // EOF면 연결 정리 
+  /* 요청 라인 읽기 */
+  if ((n = Rio_readlineb(&rio, buf, MAXLINE)) == 0) { // EOF면 연결 정리 
+    Close(connfd);
+    FD_CLR(connfd, &p->read_set);
+    p->clientfd[idx] = -1;
     return;
+  }
 
   sscanf(buf, "%s %s %s", req.method, req.uri, req.version);
   // CONNECT일 경우 터널링 (양방향 TCP 패스쓰루)
   if (!strcasecmp(req.method, "CONNECT")) {
-    char *colon = strchr(req.uri, ':');
-    if (colon) {
-      *colon = '\0';
+    char *colon = strchr(req.uri, ':'); // host:port 파싱
+    if (colon) { *colon = '\0';
       strcpy(req.hostname, req.uri);
       strcpy(req.port, colon + 1);
     } else {
-      strcpy(req.hostname, req.uri);
+      strcpy(req.hostname, req.uri); 
       strcpy(req.port, "443");
     }
-    tunnel_relay(connfd, req.hostname, req.port);
+
+    pid_t pid = Fork();
+    if (pid == 0) {    
+      tunnel_relay(connfd, req.hostname, req.port);
+      Close(connfd); /* 자식도 클라이언트를 풀에서 제거 */
+      exit(0); 
+    }
+    
+    Close(connfd); /* 부모도 클라이언트를 풀에서 제거 */
+    FD_CLR(connfd, &p->read_set);
+    p->clientfd[idx] = -1;
     return;
   }
 
   // 일반 HTTP 요청 처리 
   if (!parse_uri(req.uri, req.hostname, req.port, req.path)) {
     clienterror(connfd, req.uri, "400", "Bad Request", "URI 파싱 실패");
+    Close(connfd);
+    FD_CLR(connfd, &p->read_set);
+    p->clientfd[idx] = -1;
     return;
   }
 
-  // 나머지 헤더 수집 
+  /* 나머지 헤더 수집 */
   req.header_count = 0;
   while (Rio_readlineb(&rio, line, MAXLINE) > 0) {
     if (!strcmp(line, "\r\n")) break;
     if (req.header_count < MAX_HEADERS)
       strcpy(req.headers[req.header_count++], line);
   }
-  handle_http_request(connfd, &req);
+
+  /* fork() 후 HTTP 릴레이 */
+  pid_t pid = Fork();
+  if (pid == 0) {  // 자식 
+    handle_http_request(connfd, &req);
+    Close(connfd);
+    exit(0);
+  }
+  // 부모 정리
+  Close(connfd);
+  FD_CLR(connfd, &p->read_set);
+  p->clientfd[idx] = -1;
+}
+
+void check_clients(pool *p){
+  for (int i = 0; i <= p->maxi && p->nready > 0; i++) {
+    int connfd = p->clientfd[i];
+    if (connfd > 0 && FD_ISSET(connfd, &p->ready_set)) {
+      p->nready--; // select()에서 빼먹지 않도록
+      process_ready_client(p, i); 
+    }
+  }
 }
 
 void handle_http_request(int clientfd, http_request_t *req) {
@@ -148,9 +228,6 @@ void handle_http_request(int clientfd, http_request_t *req) {
     clienterror(clientfd, req->hostname, "502", "Bad Gateway", "Proxy couldn't connect to origin server");
     return;
   }
-  
-  // http://httpforever.com/js/init.min.js, httpforever.com, 80, /js/init.min.js
-  printf("%s, %s, %s, %s\n",req->uri, req->hostname, req->port, req->path);
 
   Rio_readinitb(&server_rio, serverfd);
 
@@ -284,7 +361,7 @@ void tunnel_relay(int clientfd, const char *hostname, const char *port){
     ssize_t n;
     char buf[MAXBUF];
 
-    /* 오리진 서버로 TCP 연결 */
+    /* 1) 프록시 → 오리진 서버로 TCP 연결 */
     if ((serverfd = Open_clientfd(hostname, port)) < 0) {
       clienterror(clientfd, hostname, "502", "Bad Gateway", "Unable to connect to the origin server");
       return;
@@ -294,7 +371,8 @@ void tunnel_relay(int clientfd, const char *hostname, const char *port){
     const char *okmsg = "HTTP/1.0 200 Connection Established\r\n\r\n";
     Rio_writen(clientfd, okmsg, strlen(okmsg));
     
-    /* 양쪽 소켓을 select()로 감시하며 한쪽에서 읽어 다른쪽으로 */
+    
+    /* 2) 양쪽 소켓을 select()로 감시하며 한쪽에서 읽어 다른 쪽으로 써 준다 */
     maxfd = (clientfd > serverfd ? clientfd : serverfd) + 1;
 
     while (1) {
@@ -309,7 +387,7 @@ void tunnel_relay(int clientfd, const char *hostname, const char *port){
       if (Select(maxfd, &readset, NULL, NULL, NULL) < 0)
         break;          /* select 에러면 터널 종료 */
 
-      /* 클라이언트로부터 데이터 도착 */
+      /* 2‑a) 클라이언트로부터 데이터 도착 */
       if (FD_ISSET(clientfd, &readset)) {
         n = read(clientfd, buf, sizeof(buf));
         if (n <= 0) 
@@ -317,7 +395,7 @@ void tunnel_relay(int clientfd, const char *hostname, const char *port){
         Rio_writen(serverfd, buf, n);
       }
 
-      /* 오리진 서버로부터 데이터 도착 */
+      /* 2‑b) 오리진 서버로부터 데이터 도착 */
       if (FD_ISSET(serverfd, &readset)) {
         n = read(serverfd, buf, sizeof(buf));
         if (n <= 0)
@@ -327,4 +405,5 @@ void tunnel_relay(int clientfd, const char *hostname, const char *port){
     }
 
     Close(serverfd);
+    // Close(clientfd);
 }
