@@ -2,30 +2,10 @@
  * proxy.c - A concurrent web proxy server based on select
  */
 #include "csapp.h"
-
-#define MAX_CACHE_SIZE (10 << 20) // 10메가
-#define MAX_OBJECT_SIZE (1 << 20) // 1메가
+#include "cache.h"
 
 #define MAX_HEADERS 100
 #define SHORT_CHARS 16
-
-// typedef struct { /* represents a pool of connected descriptors */ 
-//     int maxfd;        /* largest descriptor in read_set */   
-//     fd_set read_set;  /* set of all active descriptors */
-//     fd_set ready_set; /* subset of descriptors ready for reading  */
-//     int nready;       /* number of ready descriptors from select */   
-//     int maxi;         /* highwater index into client array */
-//     int clientfd[FD_SETSIZE];    /* set of active descriptors */
-//     rio_t clientrio[FD_SETSIZE]; /* set of active read buffers */
-// } pool; 
-
-typedef struct cache_entry {
-  char uri[MAXLINE];
-  char *content;
-  int content_length;
-  struct cache_entry *prev, *next;
-} cache_entry_t;
-
 
 typedef struct {
   char method[SHORT_CHARS];
@@ -42,31 +22,40 @@ typedef struct {
 
 
 /* 전역 함수 선언 */
-// echo에서 가져온 파트
-// void init_pool(int listenfd, pool *p);
-// void add_client(int connfd, pool *p);
-// void check_clients(pool *p);
-
 // tiny에서 가져온 파트
 int parse_uri(const char* uri, char* hostname, char* port, char* path);
 
-/* $begin proxyserversmain */
+/* 전역 변수 */
 int total_bytes_received = 0; /* counts total bytes received by server */
+static cache_t* shared_cache = NULL;
+
+
+void sigint_handler(int sig) {
+  cache_deinit(shared_cache);
+  Free(shared_cache);
+  printf("cache_deinit() 및 Free() 완료. Bye!\n");
+  exit(0);
+}
 
 void *thread_main_process_client(void *vargp) {
   int connfd = *((int *)vargp);
-  free(vargp);  // 메모리 누수 방지
+  Free(vargp);  // 메모리 누수 방지
   pthread_detach(pthread_self());  // 스레드 종료 시 자동 회수
   client_handler(connfd);  // 클라이언트 요청 처리
   Close(connfd);  // 종료 시 소켓 닫기
   return NULL;
 }
 
+/* $begin proxyserversmain */
 int main(int argc, char **argv){
 	char* port_p;
   int listenfd, connfd, port; 
   socklen_t clientlen = sizeof(struct sockaddr_in);
   struct sockaddr_in clientaddr;
+  
+  shared_cache = Malloc(sizeof(cache_t));
+  cache_init(shared_cache);
+  signal(SIGINT, sigint_handler); // 시그널 핸들러는 가능한 빨리
 
   if (argc != 2) {
 		fprintf(stderr, "usage: %s <port>\n", argv[0]);
@@ -84,6 +73,9 @@ int main(int argc, char **argv){
     pthread_t tid;
     pthread_create(&tid, NULL, thread_main_process_client, connfdp);
   }
+
+  // cache_deinit(shared_cache);
+  // Free(shared_cache);
 }
 /* $end proxyserversmain */
 
@@ -143,6 +135,17 @@ void handle_http_request(int clientfd, http_request_t *req) {
   char buf[MAXLINE];
   rio_t server_rio;
 
+  int cached_size;
+  char *cached_buf = Malloc(MAX_OBJECT_SIZE);
+  
+  // 캐시 있을 때
+  if (cache_get(shared_cache, req->uri, cached_buf, &cached_size)) {
+    Rio_writen(clientfd, cached_buf, cached_size);
+    Free(cached_buf);
+    return;  // 캐시 히트! 얼리 리턴.
+  }
+
+  // 캐시 없을 때
   serverfd = Open_clientfd(req->hostname, req->port);
   if (serverfd < 0) {
     clienterror(clientfd, req->hostname, "502", "Bad Gateway", "Proxy couldn't connect to origin server");
@@ -190,10 +193,25 @@ void handle_http_request(int clientfd, http_request_t *req) {
   // 요청 끝
   Rio_writen(serverfd, "\r\n", 2);
 
-  // 응답 중계
+  // 응답 중계 & 캐시 저장
+  char *object_buf = Malloc(MAX_OBJECT_SIZE);
+  int object_size = 0;
   ssize_t n;
-  while ((n = Rio_readn(serverfd, buf, MAXLINE)) > 0)
+  
+  while ((n = Rio_readn(serverfd, buf, MAXLINE)) > 0){
     Rio_writen(clientfd, buf, n);
+    
+    /* 캐싱 가능한 크기 내에서만 누적 */
+    if (object_size + n <= MAX_OBJECT_SIZE) {
+        memcpy(object_buf + object_size, buf, n);
+    }
+    object_size += n;
+  }
+
+  if (object_size <= MAX_OBJECT_SIZE)
+    cache_put(shared_cache, req->uri, object_buf, object_size);
+  Free(object_buf);
+  Free(cached_buf);
 
   Close(serverfd);
 }
