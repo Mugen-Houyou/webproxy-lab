@@ -5,6 +5,7 @@
 #include "cache.h"
 
 #define MAX_HEADERS 100
+#define HOSTPORT_LEN 262 // 255+6+'\0'
 #define SHORT_CHARS 16
 
 typedef struct {
@@ -22,13 +23,41 @@ typedef struct {
 
 
 /* 전역 함수 선언 */
-// tiny에서 가져온 파트
+void sigint_handler(int sig);
+void *thread_main_process_client(void *void_arg_p);
+// 이하는 tiny에서 가져온 파트
 int parse_uri(const char* uri, char* hostname, char* port, char* path);
+
 
 /* 전역 변수 */
 // int g_total_bytes_received = 0; 
 static cache_t* g_shared_cache = NULL;
 
+
+/* $begin proxyserversmain */
+int main(int argc, char **argv){
+  int listenfd, connfd;//, port; 
+  socklen_t clientlen = sizeof(struct sockaddr_in);
+  struct sockaddr_in clientaddr;
+  
+  g_shared_cache = Malloc(sizeof(cache_t));
+  cache_init(g_shared_cache);
+  signal(SIGINT, sigint_handler); // 시그널 핸들러는 가능한 빨리
+
+  if (argc != 2) {
+		fprintf(stderr, "usage: %s <port>\n", argv[0]);
+		exit(0);
+  }
+
+  listenfd = Open_listenfd(argv[1]);
+  while (1) {
+    int* connfd_p = Malloc(sizeof(int));
+    *connfd_p = Accept(listenfd, (SA *)&clientaddr, &clientlen);
+    pthread_t tid;
+    pthread_create(&tid, NULL, thread_main_process_client, connfd_p);
+  }
+}
+/* $end proxyserversmain */
 
 void sigint_handler(int sig) {
   cache_deinit(g_shared_cache);
@@ -49,33 +78,6 @@ void *thread_main_process_client(void *void_arg_p) {
   return NULL;
 }
 
-/* $begin proxyserversmain */
-int main(int argc, char **argv){
-  int listenfd, connfd;//, port; 
-  socklen_t clientlen = sizeof(struct sockaddr_in);
-  struct sockaddr_in clientaddr;
-  
-  g_shared_cache = Malloc(sizeof(cache_t));
-  cache_init(g_shared_cache);
-  signal(SIGINT, sigint_handler); // 시그널 핸들러는 가능한 빨리
-
-  if (argc != 2) {
-		fprintf(stderr, "usage: %s <port>\n", argv[0]);
-		exit(0);
-  }
-  // port = atoi(argv[1]);
-
-  listenfd = Open_listenfd(argv[1]);
-
-  while (1) {
-    int* connfd_p = Malloc(sizeof(int));
-    *connfd_p = Accept(listenfd, (SA *)&clientaddr, &clientlen);
-    pthread_t tid;
-    pthread_create(&tid, NULL, thread_main_process_client, connfd_p);
-  }
-}
-/* $end proxyserversmain */
-
 void client_handler(int connfd){
   rio_t client_rio;
   char buf[MAXLINE], line[MAXLINE];
@@ -87,8 +89,8 @@ void client_handler(int connfd){
   // 요청 라인 읽기
   if (Rio_readlineb(&client_rio, buf, MAXLINE) <= 0)  // EOF면 연결 정리 
     return;
-
   sscanf(buf, "%s %s %s", req.method, req.uri, req.version);
+
   // CONNECT일 경우 터널링 (양방향 TCP 패스쓰루)
   if (!strcasecmp(req.method, "CONNECT")) {
     char *colon = strchr(req.uri, ':');
@@ -215,7 +217,7 @@ void handle_http_request(int clientfd, http_request_t *req) {
     object_size += n;
   }
 
-  // 3. 리스폰스 헤더 && 보디를 전부 다 저장
+  // 3. 리스폰스 헤더 && 보디를 전부 다 캐시로 저장
   if (object_size <= MAX_OBJECT_SIZE)
     cache_put(g_shared_cache, req->uri, object_buf, object_size);
 
@@ -236,7 +238,7 @@ int parse_uri(const char* uri, char* hostname, char* port, char* path) {
   char* host_p;
   char* path_p;
   char* port_p;
-  char hostport[SHORT_CHARS];
+  char hostport[HOSTPORT_LEN]; // hostname+port 임시 저장
 
   // http:// 접두어 확인
   if (strncasecmp(uri, "http://", 7) != 0)
@@ -276,7 +278,6 @@ int parse_uri(const char* uri, char* hostname, char* port, char* path) {
   return 1;
 }
 
-
 void clienterror(int fd, char* cause, char* errnum, char* shortmsg, char* longmsg ){
   char buf[MAXLINE], body[MAXBUF];
   
@@ -284,11 +285,11 @@ void clienterror(int fd, char* cause, char* errnum, char* shortmsg, char* longms
   /* 이때, printf vs. fprintf vs. sprintf?
     sprintf는 파일이나 화면이 아니라 변수(버퍼)에 문자열을 출력한다 (담는다).
   */
-  sprintf(body, "<html><title>Tiny Error</title>");
+  sprintf(body, "<html><title>Gabe_s Error</title>");
   sprintf(body, "%s<body bgcolor=""ffffff"">\r\n", body);
   sprintf(body, "%s%s: %s\r\n", body, errnum, shortmsg);
   sprintf(body, "%s<p>%s: %s\r\n", body, longmsg, cause);
-  sprintf(body, "%s<hr><em>The Tiny Web server</em>\r\n", body);
+  sprintf(body, "%s<hr><em>Gabe_s web proxy server</em>\r\n", body);
 
   /* Print the HTTP response */
   sprintf(buf, "HTTP/1.0 %s %s\r\n", errnum, shortmsg);
@@ -329,10 +330,6 @@ void tunnel_relay(int clientfd, const char *hostname, const char *port){
       FD_SET(clientfd, &readset);   /* 클라이언트 → 서버 방향 감시 */
       FD_SET(serverfd, &readset);   /* 서버 → 클라이언트 방향 감시 */
 
-      // int nready;
-      // do {
-      //     nready = Select(maxfd, &readset, NULL, NULL, NULL);
-      // } while (nready < 0 && errno == EINTR);
       if (Select(maxfd, &readset, NULL, NULL, NULL) < 0)
         break;          /* select 에러면 터널 종료 */
 

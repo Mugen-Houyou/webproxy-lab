@@ -8,7 +8,7 @@
 /* 유틸부 */
 
 /**
- * hash_uri - djb2 방식(?)으로 int형 해시값 반환
+ * hash_uri - djb2 알고리즘으로 int형 해시값 반환
  * 출처: https://stackoverflow.com/questions/64699597/how-to-write-djb2-hashing-function-in-c
  */
 static int hash_uri(const char* uri) {
@@ -189,6 +189,7 @@ void cache_insert_unmanaged(cache_t* cache, const char* uri, const char* buf, in
  * 
  * @param cache: 캐시 포인터
  * @param entry: 해당 캐시 객체의 포인터
+ * @return void
  */
 void cache_remove_by_entry_unmanaged(cache_t* cache, cache_entry_t* entry){
     assert(entry != NULL);
@@ -227,18 +228,23 @@ void cache_remove_by_entry_unmanaged(cache_t* cache, cache_entry_t* entry){
 
 /**
  * cache_lookup - uri 기반으로 캐시에서 찾아봄
- *   - internal_lock 1이면 락을 내부에서 관리. 0이면 외부에서 관리.
- *   - update_lru 1이면 LRU 업데이트, 0이면 안함. (cache_insert에서도 이걸 쓰는데 거기서 LRU 업데이트를 왜 하겠나?)
+ * 
+ * @param cache: 캐시 포인터
+ * @param uri: 요청 URI (key)의 포인터
+ * @param internal_lock: internal_lock 1이면 락을 내부에서 관리. 0이면 외부에서 관리.
+ * @param update_lru: update_lru 1이면 LRU 업데이트, 0이면 안함. (cache_insert에서도 이걸 쓰는데 거기서 LRU 업데이트를 왜 하겠나?)
+ * @return void
  */
 cache_entry_t* cache_lookup(cache_t* cache, const char* uri, const int internal_lock, const int update_lru){
     if (internal_lock)
         pthread_rwlock_wrlock(&cache->ptrwlock);
 
+    // 해시값 구함 ==> 해시테이블 ==> 해시 체이닝 순서.
     cache_entry_t* entry = cache->hashtable[hash_uri(uri)];
-
     while (entry && strcmp(entry->uri, uri) != 0)  // 해시 체이닝의 끝까지 - entry가 NULL여도 탈출
         entry = entry->h_next;
 
+    // 이중 연결 리스트의 prev/next는 해시 체이닝 리스트와 사실상 별개로 작동.
     if (entry && update_lru)
         move_to_front_unmanaged(cache, entry); 
 
@@ -250,6 +256,9 @@ cache_entry_t* cache_lookup(cache_t* cache, const char* uri, const int internal_
 /**
  * cache_remove - uri 기반으로 캐시에서 제거
  * 락을 내부에서 직접 관리!
+ * 
+ * @param cache: 캐시 포인터
+ * @param uri: 요청 URI (key)의 포인터
  */
 void cache_remove(cache_t* cache, const char* uri) {
     pthread_rwlock_wrlock(&cache->ptrwlock);
@@ -267,6 +276,9 @@ void cache_remove(cache_t* cache, const char* uri) {
 /**
  * cache_evict_policy_unmanaged - 정책 기반으로 퇴출
  * 중요! 얘는 락을 관리하지 않음!
+ * 
+ * @param cache: 캐시 포인터
+ * @param required_size: 지금 넣으려는 크기
  */
 void cache_evict_policy_unmanaged(cache_t* cache, int required_size) {
     while (cache->total_cached_bytes + required_size >= MAX_CACHE_SIZE){
@@ -277,6 +289,8 @@ void cache_evict_policy_unmanaged(cache_t* cache, int required_size) {
 
 /**
  * cache_size - 캐시 크기
+ * 
+ * @param cache: 캐시 포인터
  */
 int cache_size(cache_t* cache){
     return cache->total_cached_bytes;
@@ -284,6 +298,8 @@ int cache_size(cache_t* cache){
 
 /**
  * debug_print_cache - 디버깅 함수
+ * 
+ * @param cache: 캐시 포인터
  */
 void debug_print_cache(cache_t* cache) {
     pthread_rwlock_rdlock(&cache->ptrwlock);
