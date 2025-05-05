@@ -41,7 +41,7 @@ int parse_uri(const char* uri, char* hostname, char* port, char* path);
 
 
 /* $begin proxyserversmain */
-int total_bytes_received = 0; /* counts total bytes received by server */
+int g_total_bytes_received = 0; /* counts total bytes received by server */
 
 
 // // 좀비 프로세스 처리

@@ -6,8 +6,8 @@
 #include <signal.h>
 #include <assert.h>
 
-#define MAX_CACHE_SIZE (10<<23) // 80메가
-#define MAX_OBJECT_SIZE (1<<20) // 1메가
+#define MAX_CACHE_SIZE (1<<20) // 1메가
+#define MAX_OBJECT_SIZE (100<<10) // 100킬로
 
 #define HASH_SIZE 9029 // 소수로 충돌 최소화
 #define HASH_VAL 5381l // 소수로 충돌 최소화

@@ -45,7 +45,7 @@ void sigchld_handler(int sig) {
 }
 
 /* $begin proxyserversmain */
-int total_bytes_received = 0; /* counts total bytes received by server */
+int g_total_bytes_received = 0; /* counts total bytes received by server */
 
 int main(int argc, char **argv){
 	char* port_p;

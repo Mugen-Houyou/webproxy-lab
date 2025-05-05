@@ -20,7 +20,7 @@ void add_client(int connfd, pool *p);
 void check_clients(pool *p);
 /* $begin echoserversmain */
 
-int total_bytes_received = 0; /* counts total bytes received by server */
+int g_total_bytes_received = 0; /* counts total bytes received by server */
 
 int main(int argc, char **argv){
 	char* port_p;
@@ -114,9 +114,9 @@ void check_clients(pool *p) {
 		if ((connfd > 0) && (FD_ISSET(connfd, &p->ready_set))) { 
 			p->nready--;
 			if ((n = Rio_readlineb(&rio, buf, MAXLINE)) != 0) {
-				total_bytes_received += n; //line:conc:echoservers:beginecho
+				g_total_bytes_received += n; //line:conc:echoservers:beginecho
 				printf("Server received %d (%d total) bytes on fd %d\n", 
-				n, total_bytes_received, connfd);
+				n, g_total_bytes_received, connfd);
 				Rio_writen(connfd, buf, n); //line:conc:echoservers:endecho
 			} else {  
 			/* EOF detected, remove descriptor from pool */

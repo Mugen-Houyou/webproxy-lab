@@ -26,69 +26,66 @@ typedef struct {
 int parse_uri(const char* uri, char* hostname, char* port, char* path);
 
 /* 전역 변수 */
-int total_bytes_received = 0; /* counts total bytes received by server */
-static cache_t* shared_cache = NULL;
+// int g_total_bytes_received = 0; 
+static cache_t* g_shared_cache = NULL;
 
 
 void sigint_handler(int sig) {
-  cache_deinit(shared_cache);
-  Free(shared_cache);
+  cache_deinit(g_shared_cache);
+  Free(g_shared_cache);
   printf("cache_deinit() 및 Free() 완료. Bye!\n");
   exit(0);
 }
 
-void *thread_main_process_client(void *vargp) {
-  int connfd = *((int *)vargp);
-  Free(vargp);  // 메모리 누수 방지
+void *thread_main_process_client(void *void_arg_p) {
+  int connfd = *((int *)void_arg_p);
+
+  Free(void_arg_p); // 얘는 받자마자 free시킴.
   pthread_detach(pthread_self());  // 스레드 종료 시 자동 회수
+
   client_handler(connfd);  // 클라이언트 요청 처리
-  Close(connfd);  // 종료 시 소켓 닫기
+
+  Close(connfd);
   return NULL;
 }
 
 /* $begin proxyserversmain */
 int main(int argc, char **argv){
-	char* port_p;
-  int listenfd, connfd, port; 
+  int listenfd, connfd;//, port; 
   socklen_t clientlen = sizeof(struct sockaddr_in);
   struct sockaddr_in clientaddr;
   
-  shared_cache = Malloc(sizeof(cache_t));
-  cache_init(shared_cache);
+  g_shared_cache = Malloc(sizeof(cache_t));
+  cache_init(g_shared_cache);
   signal(SIGINT, sigint_handler); // 시그널 핸들러는 가능한 빨리
 
   if (argc != 2) {
 		fprintf(stderr, "usage: %s <port>\n", argv[0]);
 		exit(0);
   }
-  port = atoi(argv[1]);
-	port_p = argv[1];
+  // port = atoi(argv[1]);
 
-  listenfd = Open_listenfd(port_p);
-  // init_pool(listenfd, &pool);
+  listenfd = Open_listenfd(argv[1]);
 
   while (1) {
-    int *connfdp = Malloc(sizeof(int));
-    *connfdp = Accept(listenfd, (SA *)&clientaddr, &clientlen);
+    int* connfd_p = Malloc(sizeof(int));
+    *connfd_p = Accept(listenfd, (SA *)&clientaddr, &clientlen);
     pthread_t tid;
-    pthread_create(&tid, NULL, thread_main_process_client, connfdp);
+    pthread_create(&tid, NULL, thread_main_process_client, connfd_p);
   }
-
-  // cache_deinit(shared_cache);
-  // Free(shared_cache);
 }
 /* $end proxyserversmain */
 
 void client_handler(int connfd){
-  rio_t rio;
+  rio_t client_rio;
   char buf[MAXLINE], line[MAXLINE];
   http_request_t req;
   int n;
 
-  Rio_readinitb(&rio, connfd);
+  Rio_readinitb(&client_rio, connfd);
 
   // 요청 라인 읽기
-  if (Rio_readlineb(&rio, buf, MAXLINE) <= 0)  // EOF면 연결 정리 
+  if (Rio_readlineb(&client_rio, buf, MAXLINE) <= 0)  // EOF면 연결 정리 
     return;
 
   sscanf(buf, "%s %s %s", req.method, req.uri, req.version);
@@ -115,7 +112,7 @@ void client_handler(int connfd){
 
   // 나머지 헤더 수집 
   req.header_count = 0;
-  while (Rio_readlineb(&rio, line, MAXLINE) > 0) {
+  while (Rio_readlineb(&client_rio, line, MAXLINE) > 0) {
     if (!strcmp(line, "\r\n")) break;
     if (req.header_count < MAX_HEADERS)
       strcpy(req.headers[req.header_count++], line);
@@ -139,13 +136,13 @@ void handle_http_request(int clientfd, http_request_t *req) {
   char *cached_buf = Malloc(MAX_OBJECT_SIZE);
   
   // 캐시 있을 때
-  if (cache_get(shared_cache, req->uri, cached_buf, &cached_size)) {
+  if (cache_get(g_shared_cache, req->uri, cached_buf, &cached_size)) {
     Rio_writen(clientfd, cached_buf, cached_size);
     Free(cached_buf);
     return;  // 캐시 히트! 얼리 리턴.
   }
+  // 아래부터는 전부 캐시 없을 때
 
-  // 캐시 없을 때
   serverfd = Open_clientfd(req->hostname, req->port);
   if (serverfd < 0) {
     clienterror(clientfd, req->hostname, "502", "Bad Gateway", "Proxy couldn't connect to origin server");
@@ -153,7 +150,7 @@ void handle_http_request(int clientfd, http_request_t *req) {
   }
   
   // http://httpforever.com/js/init.min.js, httpforever.com, 80, /js/init.min.js
-  printf("%s, %s, %s, %s\n",req->uri, req->hostname, req->port, req->path);
+  // printf("%s, %s, %s, %s\n",req->uri, req->hostname, req->port, req->path);
 
   Rio_readinitb(&server_rio, serverfd);
 
@@ -187,29 +184,41 @@ void handle_http_request(int clientfd, http_request_t *req) {
   Rio_writen(serverfd, buf, strlen(buf));
   sprintf(buf, "Proxy-Connection: close\r\n");
   Rio_writen(serverfd, buf, strlen(buf));
-  sprintf(buf, "User-Agent: Mozilla/5.0 (compatible; TinyProxy/1.0)\r\n");
+  sprintf(buf, "User-Agent: Mozilla/5.0 (compatible; GabesProxy/1.0)\r\n");
   Rio_writen(serverfd, buf, strlen(buf));
 
   // 요청 끝
   Rio_writen(serverfd, "\r\n", 2);
+  // 아래부터는 서버의 리스폰스가 들어옴.
 
-  // 응답 중계 & 캐시 저장
+  // 리스폰스 중계 & 캐시 저장
   char *object_buf = Malloc(MAX_OBJECT_SIZE);
   int object_size = 0;
   ssize_t n;
-  
-  while ((n = Rio_readn(serverfd, buf, MAXLINE)) > 0){
+
+  // 1. 리스폰스 헤더
+  while (Rio_readlineb(&server_rio, buf, MAXLINE) > 0) {
+    Rio_writen(clientfd, buf, strlen(buf)); // 클라이언트로
+    if (object_size + strlen(buf) <= MAX_OBJECT_SIZE)
+      memcpy(object_buf + object_size, buf, strlen(buf));
+    object_size += strlen(buf);
+
+    if (strcmp(buf, "\r\n") == 0) 
+      break; // 헤더 끝
+  }
+
+  // 2. 리스폰스 보디 
+  while ((n = Rio_readn(serverfd, buf, MAXLINE)) > 0) {
     Rio_writen(clientfd, buf, n);
-    
-    /* 캐싱 가능한 크기 내에서만 누적 */
-    if (object_size + n <= MAX_OBJECT_SIZE) {
-        memcpy(object_buf + object_size, buf, n);
-    }
+    if (object_size + n <= MAX_OBJECT_SIZE)
+      memcpy(object_buf + object_size, buf, n);
     object_size += n;
   }
 
+  // 3. 리스폰스 헤더 && 보디를 전부 다 저장
   if (object_size <= MAX_OBJECT_SIZE)
-    cache_put(shared_cache, req->uri, object_buf, object_size);
+    cache_put(g_shared_cache, req->uri, object_buf, object_size);
+
   Free(object_buf);
   Free(cached_buf);
 
