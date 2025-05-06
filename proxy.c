@@ -190,9 +190,9 @@ void handle_http_request(int clientfd, http_request_t *req) {
   sprintf(buf, "User-Agent: Mozilla/5.0 (compatible; GabesProxy/1.0)\r\n");
   Rio_writen(serverfd, buf, strlen(buf));
 
-  // 클라이언트로부터의 요청의 전달 끝.
+  // 클라이언트로부터의 리퀘스트를 서버로 전달 끝.
+  // 아래부터는 서버로부터의 리스폰스를 클라이언트에 전달.
   Rio_writen(serverfd, "\r\n", 2);
-  // 아래부터는 서버의 리스폰스가 들어옴.
 
   // 리스폰스 중계 & 캐시 저장
   char *resp_buf = Malloc(MAX_OBJECT_SIZE);
