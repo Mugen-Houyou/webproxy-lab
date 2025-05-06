@@ -9,7 +9,8 @@
 #define MAX_CACHE_SIZE (1<<20) // 1메가
 #define MAX_OBJECT_SIZE (100<<10) // 100킬로
 
-#define HASH_SIZE 9029 // 소수로 충돌 최소화
+// #define HASH_SIZE 9029 // 실사용 시는 큰 숫자
+#define HASH_SIZE 97 // 소수로 충돌 최소화
 #define HASH_VAL 5381l // 소수로 충돌 최소화
 
 // 하나의 캐시 객체

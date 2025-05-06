@@ -6,7 +6,6 @@
 // (빔)
 
 /* 유틸부 */
-
 /**
  * hash_uri - djb2 알고리즘으로 int형 해시값 반환
  * 출처: https://stackoverflow.com/questions/64699597/how-to-write-djb2-hashing-function-in-c
@@ -62,13 +61,20 @@ static void evict_lru_unmanaged(cache_t* cache) {
 
 
 /* 구현부 */
+/**
+ * cache_init - 캐시 전체 체계 초기화
+ */
 void cache_init(cache_t* cache) {
-    cache->head = cache->tail = NULL;
+    cache->head = NULL;
+    cache->tail = NULL;
     cache->total_cached_bytes = 0;
     memset(cache->hashtable, 0, sizeof(cache->hashtable)); // 해당 포인터에서 sizeof(cache->hashtable)만큼을 0(NULL)로 초기화.
     pthread_rwlock_init(&cache->ptrwlock, NULL);
 }
 
+/**
+ * cache_deinit - 캐시 전체 체계 말소 (락 포함)
+ */
 void cache_deinit(cache_t *cache) {
     pthread_rwlock_wrlock(&cache->ptrwlock);
 
@@ -98,6 +104,30 @@ void cache_deinit(cache_t *cache) {
  * @return 성공(1), 실패(0)
  */
 int cache_get(cache_t *cache, const char *uri, char *buf_out, int *size_out){
+    cache_entry_t* entry;
+
+    // Read lock으로 lookup만 진행
+    pthread_rwlock_rdlock(&cache->ptrwlock);
+    entry = cache_lookup(cache, uri, 0, 0); // NO internal lock, NO LRU 업데이트.
+    if (!entry) {
+        pthread_rwlock_unlock(&cache->ptrwlock);
+        return 0;
+    }
+
+    // 콘텐츠 복사
+    memcpy(buf_out, entry->content, entry->content_length);
+    *size_out = entry->content_length;
+    pthread_rwlock_unlock(&cache->ptrwlock);
+
+    // LRU 이동은 별도의 wrlock에서 수행
+    // 락 승격 문제는 없지만, rdlock해제→wrlock획득 이 사이에 내용이 바뀌면 문제 소지는 있음
+    pthread_rwlock_wrlock(&cache->ptrwlock);
+    move_to_front_unmanaged(cache, entry);
+    pthread_rwlock_unlock(&cache->ptrwlock);
+
+    return 1; // 찾으면 1
+}
+int cache_get_v1(cache_t *cache, const char *uri, char *buf_out, int *size_out){
     pthread_rwlock_wrlock(&cache->ptrwlock);
     cache_entry_t* entry = cache_lookup(cache, uri, 0, 0); // LRU 업데이트도 cache_get에서 직접.
     int result = 0; // 1 찾음; 0 없음.
@@ -210,7 +240,7 @@ void cache_remove_by_entry_unmanaged(cache_t* cache, cache_entry_t* entry){
     cache_entry_t* curr = cache->hashtable[hashed_index];
     cache_entry_t* prev = NULL;
     
-    while(curr){
+    while(curr){ // 체이닝은 단일 연결 리스트라 좀 복잡... 다음에 시간 되면...
         if(curr == entry){
             if (prev)
                 prev->h_next = curr->h_next;
@@ -316,5 +346,3 @@ void debug_print_cache(cache_t* cache) {
 
     pthread_rwlock_unlock(&cache->ptrwlock);
 }
-
-

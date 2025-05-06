@@ -23,10 +23,15 @@ typedef struct {
 
 
 /* 전역 함수 선언 */
+void clienterror(int fd, char* cause, char* errnum, char* shortmsg, char* longmsg );
+void client_handler(int connfd);  // Ensure the prototype matches the definition
 void sigint_handler(int sig);
 void *thread_main_process_client(void *void_arg_p);
+void handle_http_request(int clientfd, http_request_t *req);
+void tunnel_relay(int clientfd, char *hostname, char *port);
+
 // 이하는 tiny에서 가져온 파트
-int parse_uri(const char* uri, char* hostname, char* port, char* path);
+int parse_uri(char* uri, char* hostname, char* port, char* path);
 
 
 /* 전역 변수 */
@@ -36,7 +41,7 @@ static cache_t* g_shared_cache = NULL;
 
 /* $begin proxyserversmain */
 int main(int argc, char **argv){
-  int listenfd, connfd;//, port; 
+  int listenfd;//, connfd, port; 
   socklen_t clientlen = sizeof(struct sockaddr_in);
   struct sockaddr_in clientaddr;
   
@@ -82,7 +87,6 @@ void client_handler(int connfd){
   rio_t client_rio;
   char buf[MAXLINE], line[MAXLINE];
   http_request_t req;
-  int n;
 
   Rio_readinitb(&client_rio, connfd);
 
@@ -178,7 +182,7 @@ void handle_http_request(int clientfd, http_request_t *req) {
   // 헤더 보완
   if (!has_host) {
     sprintf(buf, "Host: %s\r\n", req->hostname);
-    Rio_writen(serverfd, buf, strlen(buf));
+    Rio_writen(serverfd, (void*)buf, strlen(buf));
   }
 
   // 필수 헤더들 통일
@@ -234,7 +238,7 @@ void handle_http_request(int clientfd, http_request_t *req) {
 /* strstr(): strstr() 함수는 string1에서 string2의 첫 번째 표시를 찾습니다. 
       함수는 일치 프로세스에서 string2로 끝나는 NULL자(\0)를 무시합니다. 
 */
-int parse_uri(const char* uri, char* hostname, char* port, char* path) {
+int parse_uri(char* uri, char* hostname, char* port, char* path) {
   char* host_p;
   char* path_p;
   char* port_p;
@@ -305,7 +309,7 @@ void clienterror(int fd, char* cause, char* errnum, char* shortmsg, char* longms
  * 터널링: 클라이언트 - 프록시 - 오리진 서버 (양방향 TCP 패스쓰루) 
  * UDP는 나도 모르겠다.
  */
-void tunnel_relay(int clientfd, const char *hostname, const char *port){
+void tunnel_relay(int clientfd, char *hostname, char *port){
     int serverfd;
     int maxfd;
     fd_set readset;
@@ -320,7 +324,7 @@ void tunnel_relay(int clientfd, const char *hostname, const char *port){
     
     /* 여기서 200 OK 응답을 먼저 클라이언트에게 보내야 함 */
     const char *okmsg = "HTTP/1.0 200 Connection Established\r\n\r\n";
-    Rio_writen(clientfd, okmsg, strlen(okmsg));
+    Rio_writen(clientfd, (void*) okmsg, strlen(okmsg));
     
     /* 양쪽 소켓을 select()로 감시하며 한쪽에서 읽어 다른쪽으로 */
     maxfd = (clientfd > serverfd ? clientfd : serverfd) + 1;
