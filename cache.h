@@ -10,13 +10,14 @@
 #define MAX_OBJECT_SIZE (100<<10) // 100킬로
 
 // #define HASH_SIZE 9029 // 실사용 시는 큰 숫자
-#define HASH_SIZE 97 // 소수로 충돌 최소화
+#define HASH_SIZE 13 // 소수로 충돌 최소화
 #define HASH_VAL 5381l // 소수로 충돌 최소화
 
 // 하나의 캐시 객체
 typedef struct cache_entry {
     char uri[MAXLINE]; // 캐시된 요청 URI (key)
-    char content[MAX_OBJECT_SIZE]; // 실제 데이터 ==> 이 사이즈 때문에 스택메모리에 넣지 말 것.
+    //char content[MAX_OBJECT_SIZE]; // 실제 데이터 ==> 이 사이즈 때문에 스택메모리에 넣지 말 것.
+    char* content; // 실제 데이터 ==> 이 사이즈 때문에 스택메모리에 넣지 말 것.
     int content_length;
 
     struct cache_entry* prev; // LRU 이전 노드
@@ -41,7 +42,7 @@ void cache_deinit(cache_t* cache); // 캐시 전체의 메모리 해제
 cache_entry_t* cache_lookup(cache_t* cache, const char* uri, const int use_lock, const int update_lru);  // O(1) 탐색 - TODO: pthread_rwlock_unlock() 어디서 할지 나중에 결정할 것!
 void cache_insert_unmanaged(cache_t* cache, const char* uri, const char* buf, int size); // 삽입
 void cache_evict_policy_unmanaged(cache_t* cache, int required_size); // 필요시 LRU 제거
-int cache_size(cache_t* cache); // 현재 총 캐시 바이트 수
+inline int cache_size(cache_t* cache); // 현재 총 캐시 바이트 수
 void cache_remove(cache_t* cache, const char* uri); // 명시적 삭제 - URI로
 void cache_remove_by_entry_unmanaged(cache_t* cache, cache_entry_t* entry); // 명시적 삭제 - cache_entry_t로
 void debug_print_cache(cache_t* cache); // LRU 순서대로 출력 (디버깅)

@@ -81,6 +81,7 @@ void cache_deinit(cache_t *cache) {
     cache_entry_t *curr = cache->head;
     while (curr) {
         cache_entry_t *next = curr->next;
+        free(curr->content);
         free(curr);
         curr = next;
     }
@@ -190,6 +191,7 @@ void cache_insert_unmanaged(cache_t* cache, const char* uri, const char* buf, in
     // 새 객체 생성
     cache_entry_t* new_entry = Malloc(sizeof(cache_entry_t));
     strcpy(new_entry->uri, uri);
+    new_entry->content = Malloc(size);
     memcpy(new_entry->content, buf, size);
     new_entry->content_length = size;
     new_entry->prev = NULL;
@@ -253,6 +255,7 @@ void cache_remove_by_entry_unmanaged(cache_t* cache, cache_entry_t* entry){
     }
     
     cache->total_cached_bytes -= entry->content_length;
+    free(entry->content);
     free(entry);
 }
 
@@ -269,7 +272,7 @@ cache_entry_t* cache_lookup(cache_t* cache, const char* uri, const int internal_
     if (internal_lock)
         pthread_rwlock_wrlock(&cache->ptrwlock);
 
-    // 해시값 구함 ==> 해시테이블 ==> 해시 체이닝 순서.
+    // 해시값 구함 ==> 해시 테이블 ==> 해시 체이닝 순서.
     cache_entry_t* entry = cache->hashtable[hash_uri(uri)];
     while (entry && strcmp(entry->uri, uri) != 0)  // 해시 체이닝의 끝까지 - entry가 NULL여도 탈출
         entry = entry->h_next;
@@ -322,7 +325,7 @@ void cache_evict_policy_unmanaged(cache_t* cache, int required_size) {
  * 
  * @param cache: 캐시 포인터
  */
-int cache_size(cache_t* cache){
+inline int cache_size(cache_t* cache){
     return cache->total_cached_bytes;
 }
 
