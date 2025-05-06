@@ -50,8 +50,8 @@ int main(int argc, char **argv){
   signal(SIGINT, sigint_handler); // 시그널 핸들러는 가능한 빨리
 
   if (argc != 2) {
-		fprintf(stderr, "usage: %s <port>\n", argv[0]);
-		exit(0);
+    fprintf(stderr, "usage: %s <port>\n", argv[0]);
+    exit(0);
   }
 
   listenfd = Open_listenfd(argv[1]);
@@ -158,8 +158,6 @@ void handle_http_request(int clientfd, http_request_t *req) {
   // http://httpforever.com/js/init.min.js, httpforever.com, 80, /js/init.min.js
   // printf("%s, %s, %s, %s\n",req->uri, req->hostname, req->port, req->path);
 
-  Rio_readinitb(&server_rio, serverfd);
-
   // 요청 라인
   sprintf(buf, "%s %s HTTP/1.0\r\n", req->method, req->path);
   Rio_writen(serverfd, buf, strlen(buf));
@@ -193,23 +191,25 @@ void handle_http_request(int clientfd, http_request_t *req) {
   sprintf(buf, "User-Agent: Mozilla/5.0 (compatible; GabesProxy/1.0)\r\n");
   Rio_writen(serverfd, buf, strlen(buf));
 
-  // 요청 끝
+  // 클라이언트로부터의 요청의 전달 끝.
   Rio_writen(serverfd, "\r\n", 2);
   // 아래부터는 서버의 리스폰스가 들어옴.
 
   // 리스폰스 중계 & 캐시 저장
+  char *resp_buf = Malloc(MAX_OBJECT_SIZE);
   char *object_buf = Malloc(MAX_OBJECT_SIZE);
   int object_size = 0;
   ssize_t n;
 
+  Rio_readinitb(&server_rio, serverfd);
   // 1. 리스폰스 헤더
-  while (Rio_readlineb(&server_rio, buf, MAXLINE) > 0) {
-    Rio_writen(clientfd, buf, strlen(buf)); // 클라이언트로
-    if (object_size + strlen(buf) <= MAX_OBJECT_SIZE)
-      memcpy(object_buf + object_size, buf, strlen(buf));
-    object_size += strlen(buf);
+  while (Rio_readlineb(&server_rio, resp_buf, MAXLINE) > 0) {
+    Rio_writen(clientfd, resp_buf, strlen(resp_buf)); // 클라이언트로
+    if (object_size + strlen(resp_buf) <= MAX_OBJECT_SIZE)
+      memcpy(object_buf + object_size, resp_buf, strlen(resp_buf));
+    object_size += strlen(resp_buf);
 
-    if (strcmp(buf, "\r\n") == 0) 
+    if (strcmp(resp_buf, "\r\n") == 0) 
       break; // 헤더 끝
   }
 
