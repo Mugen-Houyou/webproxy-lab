@@ -136,7 +136,6 @@ void handle_http_request(int clientfd, http_request_t *req) {
    */
   int serverfd;
   char buf[MAXLINE];
-  rio_t server_rio;
 
   int cached_size;
   char *cached_buf = Malloc(MAX_OBJECT_SIZE);
@@ -199,29 +198,18 @@ void handle_http_request(int clientfd, http_request_t *req) {
   char *resp_buf = Malloc(MAX_OBJECT_SIZE);
   char *object_buf = Malloc(MAX_OBJECT_SIZE);
   int object_size = 0;
+  rio_t server_rio;
   ssize_t n;
 
   Rio_readinitb(&server_rio, serverfd);
-  // 1. 리스폰스 헤더
-  while (Rio_readlineb(&server_rio, resp_buf, MAXLINE) > 0) {
-    Rio_writen(clientfd, resp_buf, strlen(resp_buf)); // 클라이언트로
-    if (object_size + strlen(resp_buf) <= MAX_OBJECT_SIZE)
-      memcpy(object_buf + object_size, resp_buf, strlen(resp_buf));
-    object_size += strlen(resp_buf);
-
-    if (strcmp(resp_buf, "\r\n") == 0) 
-      break; // 헤더 끝
-  }
-
-  // 2. 리스폰스 보디 
-  while ((n = Rio_readn(serverfd, buf, MAXLINE)) > 0) {
-    Rio_writen(clientfd, buf, n);
+  while ((n = Rio_readlineb(&server_rio, resp_buf, MAXLINE)) > 0){
     if (object_size + n <= MAX_OBJECT_SIZE)
-      memcpy(object_buf + object_size, buf, n);
-    object_size += n;
+      memcpy(object_buf + object_size, resp_buf, n);
+      object_size += n;
+    Rio_writen(clientfd, resp_buf, n);
   }
 
-  // 3. 리스폰스 헤더 && 보디를 전부 다 캐시로 저장
+  // 3. 리스폰스 헤더 && 보디를 통째로 캐시로 저장
   if (object_size <= MAX_OBJECT_SIZE)
     cache_put(g_shared_cache, req->uri, object_buf, object_size);
 
