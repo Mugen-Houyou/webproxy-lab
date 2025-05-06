@@ -86,44 +86,47 @@ void *thread_main_process_client(void *void_arg_p) {
 void client_handler(int connfd){
   rio_t client_rio;
   char buf[MAXLINE], line[MAXLINE];
-  http_request_t req;
+  http_request_t* req_p = Malloc(sizeof(http_request_t));
 
   Rio_readinitb(&client_rio, connfd);
 
   // 요청 라인 읽기
   if (Rio_readlineb(&client_rio, buf, MAXLINE) <= 0)  // EOF면 연결 정리 
     return;
-  sscanf(buf, "%s %s %s", req.method, req.uri, req.version);
+  // sscanf(buf, "%s %s %s", req_p->method, req_p->uri, req_p->version);
+  sscanf(buf, "%s %s %s", req_p->method, req_p->uri, req_p->version);
 
   // CONNECT일 경우 터널링 (양방향 TCP 패스쓰루)
-  if (!strcasecmp(req.method, "CONNECT")) {
-    char *colon = strchr(req.uri, ':');
+  if (!strcasecmp(req_p->method, "CONNECT")) {
+    char *colon = strchr(req_p->uri, ':');
     if (colon) {
       *colon = '\0';
-      strcpy(req.hostname, req.uri);
-      strcpy(req.port, colon + 1);
+      strcpy(req_p->hostname, req_p->uri);
+      strcpy(req_p->port, colon + 1);
     } else {
-      strcpy(req.hostname, req.uri);
-      strcpy(req.port, "443");
+      strcpy(req_p->hostname, req_p->uri);
+      strcpy(req_p->port, "443");
     }
-    tunnel_relay(connfd, req.hostname, req.port);
+    tunnel_relay(connfd, req_p->hostname, req_p->port);
     return;
   }
 
   // 일반 HTTP 요청 처리 
-  if (!parse_uri(req.uri, req.hostname, req.port, req.path)) {
-    clienterror(connfd, req.uri, "400", "Bad Request", "URI 파싱 실패");
+  if (!parse_uri(req_p->uri, req_p->hostname, req_p->port, req_p->path)) {
+    clienterror(connfd, req_p->uri, "400", "Bad Request", "URI 파싱 실패");
     return;
   }
 
   // 나머지 헤더 수집 
-  req.header_count = 0;
+  req_p->header_count = 0;
   while (Rio_readlineb(&client_rio, line, MAXLINE) > 0) {
     if (!strcmp(line, "\r\n")) break;
-    if (req.header_count < MAX_HEADERS)
-      strcpy(req.headers[req.header_count++], line);
+    if (req_p->header_count < MAX_HEADERS)
+      strcpy(req_p->headers[req_p->header_count++], line);
   }
-  handle_http_request(connfd, &req);
+
+  handle_http_request(connfd, req_p);
+  Free(req_p);
 }
 
 void handle_http_request(int clientfd, http_request_t *req) {
@@ -343,4 +346,49 @@ void tunnel_relay(int clientfd, char *hostname, char *port){
     }
 
     Close(serverfd);
+}
+
+
+// 폐기
+void client_handler_stack_version(int connfd){
+  rio_t client_rio;
+  char buf[MAXLINE], line[MAXLINE];
+  http_request_t req;
+
+  Rio_readinitb(&client_rio, connfd);
+
+  // 요청 라인 읽기
+  if (Rio_readlineb(&client_rio, buf, MAXLINE) <= 0)  // EOF면 연결 정리 
+    return;
+  sscanf(buf, "%s %s %s", req.method, req.uri, req.version);
+
+  // CONNECT일 경우 터널링 (양방향 TCP 패스쓰루)
+  if (!strcasecmp(req.method, "CONNECT")) {
+    char *colon = strchr(req.uri, ':');
+    if (colon) {
+      *colon = '\0';
+      strcpy(req.hostname, req.uri);
+      strcpy(req.port, colon + 1);
+    } else {
+      strcpy(req.hostname, req.uri);
+      strcpy(req.port, "443");
+    }
+    tunnel_relay(connfd, req.hostname, req.port);
+    return;
+  }
+
+  // 일반 HTTP 요청 처리 
+  if (!parse_uri(req.uri, req.hostname, req.port, req.path)) {
+    clienterror(connfd, req.uri, "400", "Bad Request", "URI 파싱 실패");
+    return;
+  }
+
+  // 나머지 헤더 수집 
+  req.header_count = 0;
+  while (Rio_readlineb(&client_rio, line, MAXLINE) > 0) {
+    if (!strcmp(line, "\r\n")) break;
+    if (req.header_count < MAX_HEADERS)
+      strcpy(req.headers[req.header_count++], line);
+  }
+  handle_http_request(connfd, &req);
 }
