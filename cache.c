@@ -242,7 +242,7 @@ void cache_remove_by_entry_unmanaged(cache_t* cache, cache_entry_t* entry){
     cache_entry_t* curr = cache->hashtable[hashed_index];
     cache_entry_t* prev = NULL;
     
-    while(curr){ // 체이닝은 단일 연결 리스트라 좀 복잡... 다음에 시간 되면...
+    while(curr){ // 체이닝쪽
         if(curr == entry){
             if (prev)
                 prev->h_next = curr->h_next;
@@ -315,7 +315,8 @@ void cache_remove(cache_t* cache, const char* uri) {
  */
 void cache_evict_policy_unmanaged(cache_t* cache, int required_size) {
     while (cache->total_cached_bytes + required_size >= MAX_CACHE_SIZE){
-        if (cache->tail == NULL) break; // 캐시가 비었는데도 공간이 부족한 경우
+        if (cache->tail == NULL) 
+            break; // 캐시가 비었는데도 공간이 부족한 경우
         evict_lru_unmanaged(cache);
     }
 }

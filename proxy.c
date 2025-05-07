@@ -67,6 +67,7 @@ int main(int argc, char **argv){
 void sigint_handler(int sig) {
   cache_deinit(g_shared_cache);
   Free(g_shared_cache);
+  g_shared_cache = NULL;
   printf("cache_deinit() 및 Free() 완료. Bye!\n");
   exit(0);
 }
@@ -75,6 +76,7 @@ void *thread_main_process_client(void *void_arg_p) {
   int connfd = *((int *)void_arg_p);
 
   Free(void_arg_p); // 얘는 받자마자 free시킴.
+  void_arg_p = NULL;
   pthread_detach(pthread_self());  // 스레드 종료 시 자동 회수
 
   client_handler(connfd);  // 클라이언트 요청 처리
@@ -127,6 +129,7 @@ void client_handler(int connfd){
 
   handle_http_request(connfd, req_p);
   Free(req_p);
+  req_p = NULL;
 }
 
 void handle_http_request(int clientfd, http_request_t *req) {
@@ -147,6 +150,7 @@ void handle_http_request(int clientfd, http_request_t *req) {
   if (cache_get(g_shared_cache, req->uri, cached_buf, &cached_size)) {
     Rio_writen(clientfd, cached_buf, cached_size);
     Free(cached_buf);
+    cached_buf = NULL;
     return;  // 캐시 히트! 얼리 리턴.
   }
   // 아래부터는 전부 캐시 없을 때
@@ -161,7 +165,7 @@ void handle_http_request(int clientfd, http_request_t *req) {
   // printf("%s, %s, %s, %s\n",req->uri, req->hostname, req->port, req->path);
 
   // 요청 라인
-  sprintf(buf, "%s %s HTTP/1.0\r\n", req->method, req->path);
+  snprintf(buf, MAXLINE, "%s %s HTTP/1.0\r\n", req->method, req->path);
   Rio_writen(serverfd, buf, strlen(buf));
 
   // 헤더 전송
@@ -181,7 +185,7 @@ void handle_http_request(int clientfd, http_request_t *req) {
 
   // 헤더 보완
   if (!has_host) {
-    sprintf(buf, "Host: %s\r\n", req->hostname);
+    snprintf(buf, MAXLINE, "Host: %s\r\n", req->hostname);
     Rio_writen(serverfd, (void*)buf, strlen(buf));
   }
 
@@ -218,6 +222,8 @@ void handle_http_request(int clientfd, http_request_t *req) {
 
   Free(object_buf);
   Free(cached_buf);
+  object_buf = NULL;
+  cached_buf = NULL;
 
   Close(serverfd);
 }
